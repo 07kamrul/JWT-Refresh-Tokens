@@ -14,6 +14,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System;
 using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -32,15 +33,15 @@ namespace JWTRefreshTokens
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
-
             services.AddControllers();
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "JWTRefreshTokens", Version = "v1" });
+
                 c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
                 {
-                    Description = "This site uses Bearer token and you have to pass" 
-                    + " it as Bearer<<space>>Token",
+                    Description = "This site uses Bearer token and you have to pass" +
+                    "it as Bearer<<space>>Token",
                     Name = "Authorization",
                     In = ParameterLocation.Header,
                     Type = SecuritySchemeType.ApiKey,
@@ -50,18 +51,18 @@ namespace JWTRefreshTokens
                 c.AddSecurityRequirement(new OpenApiSecurityRequirement()
                 {
                     {
-                        new OpenApiSecurityScheme
+                    new OpenApiSecurityScheme
+                    {
+                        Reference=new OpenApiReference
                         {
-                            Reference = new OpenApiReference
-                            {
-                                Type = ReferenceType.SecurityScheme,
-                                Id = "Bearer"
-                            },
-                            Scheme = "oauth2",
-                            Name = "Bearer",
-                            In = ParameterLocation.Header
+                            Type = ReferenceType.SecurityScheme,
+                            Id="Bearer"
                         },
-                        new List<string>()
+                        Scheme="oauth2",
+                        Name="Bearer",
+                        In = ParameterLocation.Header
+                    },
+                    new List<string>()
                     }
                 });
             });
@@ -69,7 +70,7 @@ namespace JWTRefreshTokens
             var jwtKey = Configuration.GetValue<string>("JwtSettings:Key");
             var keyBytes = Encoding.ASCII.GetBytes(jwtKey);
 
-            TokenValidationParameters tokenValidationParameters = new TokenValidationParameters
+            TokenValidationParameters tokenValidation = new TokenValidationParameters
             {
                 IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
                 ValidateLifetime = true,
@@ -78,21 +79,33 @@ namespace JWTRefreshTokens
                 ClockSkew = TimeSpan.Zero
             };
 
-            services.AddSingleton(tokenValidationParameters);
+            services.AddSingleton(tokenValidation);
 
             services.AddAuthentication(authOptions =>
             {
                 authOptions.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
                 authOptions.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+                .AddJwtBearer(jwtOptions =>
+                {
+                    jwtOptions.TokenValidationParameters = tokenValidation;
+                    jwtOptions.Events = new JwtBearerEvents();
+                    jwtOptions.Events.OnTokenValidated = async (context) =>
+                    {
+                        var ipAddress = context.Request.HttpContext.Connection.RemoteIpAddress.ToString();
+                        var jwtService = context.Request.HttpContext.RequestServices.GetService<IJwtService>();
+                        var jwtToken = context.SecurityToken as JwtSecurityToken;
+                        if (!await jwtService.IsTokenValid(jwtToken.RawData, ipAddress))
+                            context.Fail("Invalid Token Details");
 
-            }).AddJwtBearer(jwtOptions =>
-            {
-                jwtOptions.TokenValidationParameters = tokenValidationParameters;
-            });
+
+                    };
+                });
 
             services.AddTransient<IJwtService, JwtService>();
 
-            services.AddDbContext<ApplicationDbContext>(options => options.UseSqlServer(Configuration.GetConnectionString("JWTAppDbContext")));
+            services.AddDbContext<ApplicationDbContext>(options =>
+            options.UseSqlServer(Configuration.GetConnectionString("AppDbContext")));
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -108,9 +121,7 @@ namespace JWTRefreshTokens
             app.UseHttpsRedirection();
 
             app.UseRouting();
-
             app.UseAuthentication();
-
             app.UseAuthorization();
 
             app.UseEndpoints(endpoints =>
